@@ -3,28 +3,88 @@
 
 set -eu
 
+# --- Paths and defaults (overridable by localai.conf) ---
 basedir=$(cd "$(dirname "$0")" && pwd)
 confdir="$basedir/localai.d"
 
 llama_server="llama-server"
 host="127.0.0.1"
 port=8080
+tmpdir="/tmp"
 
+if [ -r "$confdir/localai.conf" ] ; then
+  source "$confdir/localai.conf"
+fi
+
+# --- CLI flag parsing ---
+detach=0
+kill=0
+status=0
+while getopts "dks" opt; do
+  case "$opt" in
+    d) detach=1 ;;
+    k) kill=1 ;;
+    s) status=1 ;;
+    ?) echo "Usage: $0 [-d|-k|-s] <model> [-- extra llama-server args]" >&2; exit 1 ;;
+  esac
+done
+shift $((OPTIND-1))
+
+pidfile="$tmpdir/localai.pid"
+
+# --- Status mode: check if server is running ---
+if [ "$status" -eq 1 ] ; then
+  if [ -f "$pidfile" ] && kill -0 "$(cat "$pidfile")" 2>/dev/null ; then
+    echo "running (pid $(cat "$pidfile"))"
+  else
+    echo "stopped"
+  fi
+  exit 0
+fi
+
+# --- Kill mode: stop background server ---
+if [ "$kill" -eq 1 ] ; then
+  if [ ! -f "$pidfile" ] ; then
+    echo "ERROR: no running instance" >&2
+    exit 1
+  fi
+  pid=$(cat "$pidfile")
+  kill "$pid" 2>/dev/null || true
+  rm -f "$pidfile"
+  echo "stopped (pid $pid)"
+  exit 0
+fi
+
+# --- Validate model and load its config ---
 if [ $# -eq 0 ] ; then
-  echo "ERROR: model is required"
+  echo "ERROR: model is required" >&2
   exit 1
 fi
 model="$1" ; shift
 if [ ! -r "$confdir/models/${model}.conf" ] ; then
-  echo "ERROR: unknown model: $model"
+  echo "ERROR: unknown model: $model" >&2
+  exit 1
 fi
-if [ -r "$confdir/localai.conf" ] ; then
-  source "$confdir/localai.conf"
-fi
-source "$confdir/models/${model}.conf" 
+source "$confdir/models/${model}.conf"
 
-if [ -r "~/.cache/huggingface/token" ] ; then
-  export HF_TOKEN=$(cat ~/.cache/huggingface/token)
+# --- Load HuggingFace token if available ---
+huggingface_token="$HOME/.cache/huggingface/token"
+if [ -r "$huggingface_token" ] ; then
+  export HF_TOKEN=$(cat "$huggingface_token")
 fi
 
-exec ${llama_server} --host "$host" --port $port -hf "${user}/${model}:${quant}" --alias "${model}" "${args[@]}" "$@"
+# --- Run mode: detach (background) or foreground ---
+if [ "$detach" -eq 1 ] ; then
+  if [ -f "$pidfile" ] && kill -0 "$(cat "$pidfile")" 2>/dev/null ; then
+    echo "ERROR: already running (pid $(cat "$pidfile"))" >&2
+    exit 1
+  fi
+  logfile="$tmpdir/localai-$(date +%Y%m%d_%H%M%S).log"
+  ${llama_server} --host "$host" --port $port -hf "${user}/${model}:${quant}" --alias "${model}" "${args[@]}" "$@" < /dev/null >> "$logfile" 2>&1 &
+  pid=$!
+  disown
+  echo "$pid" > "$pidfile"
+  echo "started $model in background (pid $pid)"
+else
+  exec ${llama_server} --host "$host" --port $port -hf "${user}/${model}:${quant}" --alias "${model}" "${args[@]}" "$@"
+fi
