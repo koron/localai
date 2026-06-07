@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# vim:set ts=8 sts=2 sw=2 tw=0 et:
+
+set -eu
+
+basedir=$(cd "$(dirname "$0")" && pwd)
+confdir="$basedir/localai.d"
+
+llama_server="llama-server"
+host="127.0.0.1"
+port=8080
+
+if [ $# -eq 0 ] ; then
+  echo "ERROR: model is required"
+  exit 1
+fi
+model="$1" ; shift
+if [ ! -r "$confdir/models/${model}.conf" ] ; then
+  echo "ERROR: unknown model: $model"
+fi
+if [ -r "$confdir/localai.conf" ] ; then
+  source "$confdir/localai.conf"
+fi
+source "$confdir/models/${model}.conf" 
+
+if [ -r "~/.cache/huggingface/token" ] ; then
+  export HF_TOKEN=$(cat ~/.cache/huggingface/token)
+fi
+
+exec ${llama_server} --host "$host" --port $port -hf "${user}/${model}:${quant}" --alias "${model}" "${args[@]}" "$@"
