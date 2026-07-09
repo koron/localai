@@ -20,12 +20,14 @@ fi
 detach=0
 kill=0
 status=0
-while getopts "dks" opt; do
+verbose=0
+while getopts "dksv" opt; do
   case "$opt" in
     d) detach=1 ;;
     k) kill=1 ;;
     s) status=1 ;;
-    ?) echo "Usage: $0 [-d|-k|-s] <model> [-- extra llama-server args]" >&2; exit 1 ;;
+    v) verbose=1 ;;
+    ?) echo "Usage: $0 [-d|-k|-s|-v] <model> [-- extra llama-server args]" >&2; exit 1 ;;
   esac
 done
 shift $((OPTIND-1))
@@ -74,17 +76,22 @@ if [ -r "$huggingface_token" ] ; then
 fi
 
 # --- Run mode: detach (background) or foreground ---
+runcmd=( "${llama_server}" --host "$host" --port $port -hf "${user}/${model}:${quant}" --alias "${model}" "${args[@]}" "$@" )
+if [ "$verbose" -ne 0 ]; then
+  echo "${runcmd[@]}"
+fi
 if [ "$detach" -eq 1 ] ; then
   if [ -f "$pidfile" ] && kill -0 "$(cat "$pidfile")" 2>/dev/null ; then
     echo "ERROR: already running (pid $(cat "$pidfile"))" >&2
     exit 1
   fi
   logfile="$tmpdir/localai-$(date +%Y%m%d_%H%M%S).log"
-  ${llama_server} --host "$host" --port $port -hf "${user}/${model}:${quant}" --alias "${model}" "${args[@]}" "$@" < /dev/null >> "$logfile" 2>&1 &
+  "${runcmd[@]}" < /dev/null >> "$logfile" 2>&1 &
+  #${llama_server} --host "$host" --port $port -hf "${user}/${model}:${quant}" --alias "${model}" "${args[@]}" "$@" < /dev/null >> "$logfile" 2>&1 &
   pid=$!
   disown
   echo "$pid" > "$pidfile"
   echo "started $model in background (pid $pid)"
 else
-  exec ${llama_server} --host "$host" --port $port -hf "${user}/${model}:${quant}" --alias "${model}" "${args[@]}" "$@"
+  exec "${runcmd[@]}"
 fi
